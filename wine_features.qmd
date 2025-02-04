@@ -1,0 +1,86 @@
+
+title: "Wines of the PNW"
+author: "Your name here!"
+date: "01/27/2025"
+
+format: 
+  html:
+    embed-resources: true
+
+**Step Up Code:**
+```{r}
+library(tidyverse)
+library(caret)
+library(fastDummies)
+wine <- readRDS(gzcon(url("https://github.com/cd-public/D505/raw/master/dat/wine.rds")))
+```
+
+**Explanataion:The code imports the necessary packages for the homework and analysis. However, the fastDummies package is not utilized. Additionally, we load are data which in this case is data related to wine from github.**
+
+> <span style="color:red;font-weight:bold">TODO</span>: *write your line-by-line explanation of the code here*
+
+# Feature Engineering
+
+We begin by engineering an number of features.
+
+1. Create a total of 10 features (including points). 
+2. Remove all rows with a missing value. 
+3. Ensure only log(price) and engineering features are the only columns that remain in the `wino` dataframe.
+
+```{r}
+wino <- wine %>% 
+  mutate(lprice=log(price)) %>% 
+   group_by(taster_name) %>%
+  mutate(
+    taster_avg_score = mean(points, na.rm = TRUE),
+    taster_score_dev = points - taster_avg_score,
+    taster_avg_price = mean(price, na.rm = TRUE)
+  ) %>%
+  ungroup() %>%
+  mutate(fruity_dummy = as.integer(str_detect(tolower(description), "fruity")),
+  earthy_dummy = as.integer(str_detect(tolower(description), "earth|earthy")),
+  price_pp = price / points,
+  expensive = ifelse(price > median(price, na.rm = TRUE), 1, 0),
+  not_expensive = ifelse(price < median(price, na.rm = TRUE), 1, 0),
+  review_count =  str_count(description, "\\S+")) %>% na.omit() %>% 
+  select(-c(country,description,province,region_1,region_2,taster_twitter_handle,price,designation,points,taster_name,variety,winery,year,id,title))
+```
+
+**Explanation:We begin by mutating the data set to create a new column, lprice, which represents the logarithm of the wine prices using the price column. Next, we use group_by to organize the data by taster_name, allowing us to compute statistics for each taster. Specifically, we calculate the average score by taking the mean of the points column. Additionally, we determine each taster’s deviation from the mean score. To explore potential patterns in wine preferences, we calculate the average price of wines tasted by each reviewer. This may helps show whether certain tasters review expensive or inexpensive wines. After these computations, we use the function ungroup() to remove the grouping, as the subsequent transformations should not be grouped by the taster_name column. After doing this, I investigated whether specific terms like "fruity" or "earthy" in the wine descriptions influenced log price. To do this, I applied ifelse with str_detect, though I initially attempted to use grepl but encountered issues implementing it within ifelse. Additionally, I created a price_pp(price per point) column to estimate the cost per rating point. To classify wines as expensive or inexpensive, I used the median price as a threshold—wines above the median were labeled expensive, while those below were considered inexpensive. Finally, I calculated the review length by applying str_count to the description column, counting the number of words in each review to assess its potential effect on log price. Before moving on to training and testing, we need to remove all rows containing NA values. Additionally, we must drop any columns that are not the features we generated. This helps prevent multicollinearity, which could arise if newly created columns are too closely related to their original sources. Another reason for removing certain columns is that some contain a large number of categorical variables, which can significantly slow down training. I initially overlooked this step and ended up waiting over an hour for the model to run. The country column had to be removed because, after filtering out NA values, it contained only a single remaining category. **
+# Caret
+
+We now use a train/test split to evaluate the features.
+
+1. Use the Caret library to partition the wino dataframe into an 80/20 split. 
+2. Run a linear regression with bootstrap resampling. 
+3. Report RMSE on the test partition of the data.
+
+```{r}
+train_w <- createDataPartition(wino$lprice, p = 0.8, list = FALSE)
+wino_tr <- wino[train_w, ]
+wino_te <- wino[-train_w, ]
+summary(wino_tr)
+```
+**Explanation: In this chunk of code, we start by creating a training partition using createDataPartition(), which splits the lprice column in wino, assigning 80% of the data to training. We set list = FALSE so that it returns row indices instead of a list. Next, we pass these indices to wino to create two separate data sets, wino_tr for training, which contains the selected 80% of the data, and wino_te for testing, which holds the remaining 20%. Lastly, we call summary(wino_tr) to get a quick statistical overview of the training data set.**
+
+
+```{r}
+m1 <- train(lprice ~ .,
+  data = wino_tr,
+  method = "lm",
+  trControl = trainControl(method = "boot")
+)
+m1
+print(m1$resample)
+```
+**Explanation:A linear regression model is trained using the train() function, with lprice as the dependent variable and all other columns in wino_tr as predictors. The argument method = "lm" specifies that a linear model is being fitted. The trControl parameter is set to trainControl(method = "boot"), which applies bootstrapping to re sample the data. After training, we print m1$resample which shows us many important statistical performance metrics but in this case were are interested mainly in RMSE. RMSE measures the average magnitude of the model’s prediction errors, with lower values indicating better model performance. However, RMSE should not be solely relied upon, as it is sensitive to large errors due to squaring each residual.**
+
+
+# Variable selection
+
+We now graph the importance of your 10 features.
+
+```{r}
+plot(varImp(m1, scale = TRUE))
+```
+**Explanation: This variable importance plot shows the relative contribution of each predictor in the trained linear regression model. The price_pp (price per point) variable is by far the most important feature, indicating that it has the strongest relationship with lprice. Other features such as expensive, taster_score_dev, and not_expensive also contribute to the model but to a much lesser extent. It is important to note that due to how I believe the varImp function operates, even if all of these variables were poor predictors of log price, price per point might still appear highly important. This would occur not because it is a strong predictor, but simply because it has the highest relative importance among the given variables.**
